@@ -753,6 +753,8 @@ analyze() {
 
     if [ "$cfg" = unreadable ]; then c4=unknown; t4="cannot read $conf"
     elif [ -z "$F_resolver" ]; then c4=$none; t4="no resolver in http{}$part"
+    elif [ -z "$F_varpass" ] && [ -n "$F_script" ]; then
+        c4=unknown; t4="$F_resolver; $F_script code may resolve names and make subrequests"
     elif [ -z "$F_varpass" ]; then c4=$none; t4="resolver set, no *_pass with a variable$part"
     elif [ -n "$F_subreq" ]; then c4=impacted; t4="$F_resolver, $F_varpass, $F_subreq"
     else c4=unknown; t4="resolver and $F_varpass; no mirror/ssi/auth_request seen, other subrequest sources not ruled out"

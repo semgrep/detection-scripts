@@ -72,6 +72,13 @@ An nginx is impacted by a CVE when all three conditions hold for it:
 | CVE-2026-123634 | A `resolver` directive, a `*_pass` target that contains a variable, and a directive that creates subrequests: `mirror`, `ssi on`, `auth_request`, `add_before_body` or `add_after_body`. |
 | CVE-2026-113425 | A `mail {}` block with at least one `server`. |
 
+Lua and njs code can open backend connections, look up names through the
+`resolver` and make subrequests, and none of that can be read from the
+configuration. Where a CVE's directives are only partly present and Lua or
+njs handlers are configured, that CVE is reported `unknown`, not
+`not impacted`. The same goes for CVE-2026-123634 when `resolver` and a
+variable `*_pass` are present without a subrequest directive.
+
 A feature that is compiled out (for example no `--with-http_v2_module`) rules
 its CVE out regardless of the configuration.
 
@@ -224,8 +231,8 @@ Not covered:
 - Windows and macOS.
 - Directives passed with `-g` on the nginx command line.
 - Configuration that exists only in memory, and anything Lua or njs code does
-  at run time. With Lua or njs handlers and no `*_pass`, CVE-2026-123633 and
-  CVE-2026-121810 are reported `unknown`.
+  at run time. See the note under the configuration table for how that is
+  reported.
 - Third-party modules that open backend connections or create subrequests.
 - Stopped containers and images. Unpack one and use `-r`.
 - Managed services that run nginx for you, such as a cloud load balancer or a

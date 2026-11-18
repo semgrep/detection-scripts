@@ -17,6 +17,8 @@ safe() { printf '%s' "$1" | tr -c 'A-Za-z0-9._@-' '_'; }
 
 ENVP=""
 for v in NGINX2ROOT_FIXED_PKGS NGINX2ROOT_FIXED_IN; do
+    isset=""
+    val=""
     eval "isset=\${$v+yes}; val=\${$v-}"
     [ "${isset:-}" = yes ] || continue
     case "$val" in

@@ -395,6 +395,39 @@ EOF
 det "$V" "$C/resolverfixed.conf"
 check "resolver with a fixed proxy_pass" 0 "resolver set, no *_pass with a variable"
 
+cat > "$C/resolverstapling.conf" <<'EOF'
+events {}
+http {
+    resolver 10.0.0.2;
+    server { listen 443 ssl; ssl_stapling on; ssl_stapling_verify on; root /srv; }
+}
+EOF
+det "$V" "$C/resolverstapling.conf"
+check "resolver used only for OCSP stapling" 0 "=CVE-2026-123634: not impacted"
+
+cat > "$C/resolvernjs.conf" <<'EOF'
+events {}
+http {
+    resolver 10.0.0.2;
+    js_import main from app.js;
+    server { listen 80; location / { js_content main.handler; } }
+}
+EOF
+det "$V" "$C/resolvernjs.conf"
+check "resolver with an njs handler and no variable proxy_pass is unknown" 2 \
+    "=CVE-2026-123634: unknown" "js_content code may resolve names and make subrequests"
+
+cat > "$C/resolverlua.conf" <<'EOF'
+events {}
+http {
+    resolver 10.0.0.2;
+    server { listen 80; location / { content_by_lua_block { ngx.say("x") } } }
+}
+EOF
+det "$V" "$C/resolverlua.conf"
+check "resolver with a Lua handler and no variable proxy_pass is unknown" 2 \
+    "=CVE-2026-123634: unknown" "content_by_lua_block code may resolve names"
+
 for d in "ssi on" "auth_request /auth" "add_before_body /hdr" "add_after_body /ftr"; do
     cat > "$C/sub.conf" <<EOF
 events {}
@@ -608,7 +641,7 @@ Status: install ok installed
 Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
 Version: 1.24.0-2ubuntu7.5
 EOF
-rdet() { run bash "$S" --no-procs --no-disk --no-kernel -r "$R" -b /usr/sbin/nginx "$@"; }
+rdet() { run bash "$S" --no-procs --no-disk --no-kernel -r "$R" -b /usr/sbin/nginx; }
 
 rdet
 check "--root: package, default config path, absolute symlink kept inside the root" 1 \
