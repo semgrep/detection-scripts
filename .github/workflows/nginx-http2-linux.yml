@@ -37,6 +37,7 @@ jobs:
         run: >-
           shellcheck -S warning
           "$DIR/detect-nginx-http2.sh" "$DIR/ssh-nginx-http2.sh"
+          "$DIR/k8s-exec-nginx-http2.sh"
           "$DIR/tests/run-tests.sh" "$DIR/tests/fake-nginx"
 
   test-linux:
