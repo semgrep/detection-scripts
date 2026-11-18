@@ -1,4 +1,4 @@
-name: nginx (CVE-2026-123007, CVE-2026-123633, CVE-2026-123634) bash detector
+name: nginx (CVE-2026-123007, CVE-2026-123633, CVE-2026-123634, CVE-2026-121810, CVE-2026-113425) bash detector
 
 on:
   push:
