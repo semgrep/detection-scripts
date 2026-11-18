@@ -1,0 +1,65 @@
+---
+
+- name: nginx2root host detection
+  hosts: all
+  gather_facts: false
+  become: true
+  vars:
+    detect_script: "{{ playbook_dir }}/detect-nginx2root.sh"
+    detect_args: ""
+    fixed_pkgs: ""
+    results_dir: "{{ playbook_dir }}/results"
+
+  tasks:
+    - name: Run the detector (copied, run, and removed by Ansible; nothing installed)
+      ansible.builtin.script: "{{ detect_script }} {{ detect_args }}"
+      args:
+        executable: bash
+      environment:
+        NGINX2ROOT_FIXED_PKGS: "{{ fixed_pkgs }}"
+      register: detect
+      changed_when: false
+      failed_when: detect.rc not in [0, 1, 2]
+
+    - name: Derive this host's verdict from the exit code
+      ansible.builtin.set_fact:
+        nginx2root_verdict: "{{ 'impacted' if detect.rc == 1 else ('unknown' if detect.rc == 2 else 'not impacted') }}"
+
+    - name: Create the results folder on the control node
+      ansible.builtin.file:
+        path: "{{ results_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: Save this host's detector output on the control node
+      ansible.builtin.copy:
+        content: "{{ detect.stdout }}"
+        dest: "{{ results_dir }}/{{ inventory_hostname }}.txt"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+      changed_when: false
+
+    - name: Print the fleet summary
+      run_once: true
+      delegate_to: localhost
+      become: false
+      vars:
+        pairs: >-
+          {{ ansible_play_hosts_all
+             | zip(ansible_play_hosts_all
+                   | map('extract', hostvars, 'nginx2root_verdict')
+                   | map('default', 'no result')
+                   | list)
+             | list }}
+      ansible.builtin.debug:
+        msg:
+          - "nginx2root fleet detection (CVE-2026-123007, -123633, -121810, -123634, -113425)"
+          - "impacted:     {{ pairs | selectattr('1', 'equalto', 'impacted')     | map(attribute='0') | list }}"
+          - "unknown:      {{ pairs | selectattr('1', 'equalto', 'unknown')      | map(attribute='0') | list }}"
+          - "not impacted: {{ pairs | selectattr('1', 'equalto', 'not impacted') | map(attribute='0') | list }}"
+          - "no result:    {{ pairs | selectattr('1', 'equalto', 'no result')    | map(attribute='0') | list }}"
+          - "per-host output saved under {{ results_dir }}/"

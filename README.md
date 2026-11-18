@@ -18,3 +18,4 @@ Where possible, detections are written to be fleet-policy compatible - known una
 | Directory | What it detects |
 |---|---|
 | `CVE-2026-114938/` | JVMs exposed to the HotSpot x86-64 AVX-512 Base64 decode heap overwrite (CVE-2026-114938, JDK-8392044) |
+| `nginx2root/` | nginx exposed to the five "nginx2root" bugs fixed in nginx 1.31.9 and 1.30.7 (CVE-2026-123007, CVE-2026-123633, CVE-2026-121810, CVE-2026-123634, CVE-2026-113425) |

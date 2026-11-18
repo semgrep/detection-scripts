@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nginx2root
+  namespace: nginx2root
+spec:
+  selector:
+    matchLabels:
+      app: nginx2root
+  template:
+    metadata:
+      labels:
+        app: nginx2root
+    spec:
+      hostPID: true
+      nodeSelector:
+        kubernetes.io/os: linux
+      tolerations:
+        - operator: Exists
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: detect
+          image: debian:stable-slim
+          securityContext:
+            privileged: true
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: NGINX2ROOT_FIXED_PKGS
+              value: ""
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "=== node: ${NODE_NAME} ==="
+              bash /scripts/detect-nginx2root.sh --no-disk || true
+              echo "=== end node: ${NODE_NAME} ==="
+              sleep infinity
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: detect
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: detect
+          configMap:
+            name: detect
