@@ -1,0 +1,36 @@
+name: ruby2shell PowerShell detector (Windows)
+
+on:
+  push:
+    paths:
+      - "CVE-2026-132825/windows/**"
+      - ".github/workflows/ruby2shell-windows.yml"
+  pull_request:
+    paths:
+      - "CVE-2026-132825/windows/**"
+      - ".github/workflows/ruby2shell-windows.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.shell }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest]
+        shell: [powershell.exe, pwsh.exe]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Run-Tests.ps1 builds tests/FakeRuby.cs into ruby.exe stand-ins with the
+      # .NET Framework C# compiler; no Ruby is installed or needed.
+      - name: Run tests
+        shell: pwsh
+        run: ./CVE-2026-132825/windows/tests/Run-Tests.ps1 -Shell '${{ matrix.shell }}'
