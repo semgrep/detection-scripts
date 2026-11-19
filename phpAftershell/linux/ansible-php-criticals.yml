@@ -1,0 +1,159 @@
+---
+# ansible-php-criticals.yml
+#
+# Run the PHP-criticals (2026-11-19) host detector on every Linux host in the
+# inventory and collect each host's verdict on the control node.
+#
+# BEST-EFFORT TRIAGE AID. Read-only on targets. No warranty: a "not impacted"
+# verdict is the detector's opinion of what it could see, not proof of safety.
+#
+# What it does
+#   Drives this folder's own detect-php-criticals.sh and nothing else; the
+#   playbook contains NO CVE logic. ansible.builtin.script copies the detector
+#   to Ansible's remote temp dir, runs it with -q, and removes it again -- that
+#   temp copy is the only thing ever written to a target, and no agent is
+#   installed. No task changes a target (they report "ok", never "changed"),
+#   so re-runs are idempotent.
+#
+# Required access / permissions
+#   - A normal Ansible connection (SSH) to the targets; bash 3.2+ on them
+#     (the detector requires bash). Python is NOT needed on the targets.
+#   - become (root) is on by default so PHP / php-fpm / web-server config that
+#     is not world-readable can still be read; unreadable config makes the
+#     detector answer "unknown". Turn off with -e phpcrit_become=false.
+#
+# Usage
+#   ansible-playbook -i inventory ansible-php-criticals.yml
+#   ansible-playbook -i inventory ansible-php-criticals.yml -l webservers
+#   ansible-playbook -i inventory ansible-php-criticals.yml -e phpcrit_become=false
+#   ansible-playbook -i inventory ansible-php-criticals.yml -e results_dir=./results
+#   ansible-playbook -i inventory ansible-php-criticals.yml -e fail_on_impacted=false
+#   ansible-playbook -i inventory ansible-php-criticals.yml \
+#       -e 'detect_args="-q -b /opt/php/bin/php"'
+#
+# Exit-code contract (from the detector; this is the fleet signal)
+#   0 none impacted   1 >=1 CVE impacted   2 unknown / no PHP found   3 usage
+# A verdict needs the detector's final verdict line (impacted | not impacted |
+# unknown); if that line and the exit code disagree, the worse of the two wins.
+#
+# Output and playbook result
+#   - per host:  "<host>: <verdict> (exit N)" plus the detector's per-CVE lines
+#   - a per-verdict host summary at the end of the play
+#   - impacted hosts are marked FAILED (fail_on_impacted, default true), as are
+#     hosts where the detector produced no verdict, so `ansible-playbook` exits
+#     nonzero (2) when any host is impacted. "unknown" hosts are reported but
+#     not failed.
+#   - with -e results_dir=DIR each host's full output is saved on the control
+#     node as DIR/<host>.txt (off by default).
+
+- name: PHP criticals 2026-11-19 host detection
+  hosts: all
+  gather_facts: false
+  become: "{{ phpcrit_become | default(true) | bool }}"
+  vars:
+    detect_script: "{{ playbook_dir }}/detect-php-criticals.sh"
+    detect_args: "-q"
+    results_dir: ""
+    fail_on_impacted: true
+
+  tasks:
+    - name: Check that the detector is next to this playbook (control node)
+      ansible.builtin.stat:
+        path: "{{ detect_script }}"
+      register: phpcrit_detector
+      delegate_to: localhost
+      become: false
+      run_once: true
+      check_mode: false
+
+    - name: Stop if the detector is missing
+      ansible.builtin.assert:
+        that:
+          - phpcrit_detector.stat.exists
+        fail_msg: "detector not found at {{ detect_script }} (set -e detect_script=/path/to/detect-php-criticals.sh)"
+        quiet: true
+      run_once: true
+
+    - name: Run the detector (copied to a temp path, run, and removed by Ansible)
+      ansible.builtin.script: "{{ detect_script }} {{ detect_args }}"
+      args:
+        executable: bash
+      register: phpcrit_run
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Derive this host's verdict from the final verdict line and exit code
+      vars:
+        phpcrit_lines: "{{ (phpcrit_run.stdout | default('')).splitlines() | map('trim') | list }}"
+        phpcrit_line: "{{ phpcrit_lines | select('match', '^(impacted|not impacted|unknown)$') | list | last | default('') }}"
+        phpcrit_rc: "{{ phpcrit_run.rc | default(-1) | int }}"
+      ansible.builtin.set_fact:
+        phpcrit_exit: "{{ phpcrit_rc | int }}"
+        phpcrit_cve_lines: "{{ phpcrit_lines | select('match', '^CVE-[0-9]+-[0-9]+ ') | list }}"
+        phpcrit_verdict: >-
+          {{ 'error' if phpcrit_line == ''
+             else ('impacted' if (phpcrit_line == 'impacted' or (phpcrit_rc | int) == 1)
+             else ('unknown' if (phpcrit_line == 'unknown' or (phpcrit_rc | int) != 0)
+             else 'not impacted')) }}
+
+    - name: Print this host's verdict
+      ansible.builtin.debug:
+        msg: "{{ [inventory_hostname ~ ': ' ~ phpcrit_verdict ~ ' (exit ' ~ phpcrit_exit ~ ')'] + phpcrit_cve_lines }}"
+
+    - name: Create the results folder on the control node (only with -e results_dir=DIR)
+      ansible.builtin.file:
+        path: "{{ results_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      when: results_dir | length > 0
+
+    - name: Save this host's detector output on the control node (only with -e results_dir=DIR)
+      ansible.builtin.copy:
+        content: "{{ phpcrit_run.stdout | default('') }}"
+        dest: "{{ results_dir }}/{{ inventory_hostname }}.txt"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      when: results_dir | length > 0
+
+    - name: Print the fleet summary
+      run_once: true
+      delegate_to: localhost
+      become: false
+      vars:
+        # [host, verdict] pairs. Hosts that were unreachable have no fact set,
+        # so extract yields Undefined, mapped to "no result".
+        pairs: >-
+          {{ ansible_play_hosts_all
+             | zip(ansible_play_hosts_all
+                   | map('extract', hostvars, 'phpcrit_verdict')
+                   | map('default', 'no result')
+                   | list)
+             | list }}
+      ansible.builtin.debug:
+        msg:
+          - "PHP criticals 2026-11-19 fleet detection ({{ ansible_play_hosts_all | length }} host(s))"
+          - "impacted:     {{ pairs | selectattr('1', 'equalto', 'impacted')     | map(attribute='0') | list }}"
+          - "unknown:      {{ pairs | selectattr('1', 'equalto', 'unknown')      | map(attribute='0') | list }}"
+          - "not impacted: {{ pairs | selectattr('1', 'equalto', 'not impacted') | map(attribute='0') | list }}"
+          - "error:        {{ pairs | selectattr('1', 'equalto', 'error')        | map(attribute='0') | list }}"
+          - "no result:    {{ pairs | selectattr('1', 'equalto', 'no result')    | map(attribute='0') | list }}"
+
+    - name: Mark hosts where the detector produced no verdict as failed
+      ansible.builtin.fail:
+        msg: >-
+          {{ inventory_hostname }}: no verdict line from the detector (exit {{ phpcrit_exit }});
+          is bash present on the target? {{ (phpcrit_run.stderr | default('')) | truncate(200) }}
+      when: phpcrit_verdict == 'error'
+
+    - name: Mark impacted hosts as failed
+      ansible.builtin.fail:
+        msg: "{{ inventory_hostname }}: impacted (exit {{ phpcrit_exit }}) -- see the per-CVE lines above"
+      when:
+        - fail_on_impacted | bool
+        - phpcrit_verdict == 'impacted'
