@@ -19,3 +19,4 @@ Where possible, detections are written to be fleet-policy compatible - known una
 |---|---|
 | `CVE-2026-114938/` | JVMs exposed to the HotSpot x86-64 AVX-512 Base64 decode heap overwrite (CVE-2026-114938, JDK-8392044) |
 | `CVE-2026-123633.CVE-2026-123007/` | nginx exposed to the HTTP/2 flow-control overflow (CVE-2026-123007) or use-after-free (CVE-2026-123633) with HTTP/2 on, to the resolver use-after-free (CVE-2026-123634) with a `resolver` configured, to the HTTP/3 use-after-free (CVE-2026-121810) with a QUIC listener, or to the mail proxy use-after-free (CVE-2026-113425) with a mail server |
+| `CVE-2026-132825/` | Ruby interpreters exposed to "Ruby2Shell", the string case-conversion heap overflow (CVE-2026-132825), when the application mounts `Rack::MethodOverride` (Rails unless `api_only`, classic-style Sinatra) or enables Rodauth account creation; also reports the six sibling advisories fixed in the same Ruby releases (4.0.10, 3.4.13, 3.3.14) |

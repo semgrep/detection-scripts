@@ -1,0 +1,66 @@
+name: ruby2shell bash detector (Linux)
+
+on:
+  push:
+    paths:
+      - "CVE-2026-132825/linux/**"
+      - ".github/workflows/ruby2shell-linux.yml"
+  pull_request:
+    paths:
+      - "CVE-2026-132825/linux/**"
+      - ".github/workflows/ruby2shell-linux.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: shellcheck
+        run: >-
+          shellcheck -S warning
+          CVE-2026-132825/linux/detect-ruby2shell.sh CVE-2026-132825/linux/tests/run-tests.sh
+          CVE-2026-132825/linux/tests/run-tests-host.sh
+          CVE-2026-132825/linux/ssh-ruby2shell.sh CVE-2026-132825/linux/k8s-exec-ruby2shell.sh
+
+  test:
+    name: bash on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-22.04]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The harness pulls the official ruby 3.4.12-slim and 3.4.13-slim images,
+      # pinned by digest inside run-tests.sh, and debian:stable-slim.
+      - name: Run tests (Docker)
+        run: bash ./CVE-2026-132825/linux/tests/run-tests.sh
+
+      # Decision logic against the runner's own Ruby; skips itself if that
+      # Ruby is already patched.
+      - name: Run tests (host Ruby)
+        run: bash ./CVE-2026-132825/linux/tests/run-tests-host.sh
+
+  # macOS ships bash 3.2 and an unpatched Ruby 2.6 in /usr/bin. This job is the
+  # only test of the detector's macOS process scan (ps and lsof instead of /proc).
+  test-macos:
+    name: bash 3.2 on macos-latest
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run tests (host Ruby)
+        run: /bin/bash ./CVE-2026-132825/linux/tests/run-tests-host.sh
