@@ -1,0 +1,162 @@
+# k8s-php-criticals.yaml -- run the PHP-criticals (2026-11-19) host detector on
+# every Linux node with one DaemonSet and log each node's verdict.
+#
+# BEST-EFFORT TRIAGE AID. Read-only on targets. No warranty: a "not impacted"
+# verdict is the detector's opinion of what it could see, not proof of safety.
+#
+# What it does
+#   One pod per node. The pod is privileged with hostPID and uses nsenter to
+#   step into the NODE's mount namespace, where it runs this folder's own
+#   detect-php-criticals.sh -q with the node's bash against the node's
+#   filesystem (PHP binaries, php.ini, FPM pools, web-server config). The
+#   detector is mounted read-only from a ConfigMap and read by the node's bash
+#   through /proc/<pid>/root, so nothing is copied to the node or into any
+#   workload pod and nothing is installed. The manifest contains NO CVE logic;
+#   the detector is the single source of truth.
+#
+#   Scope: this reports PHP installed ON THE NODES. PHP that only exists inside
+#   application images is not a node install -- check those pods with
+#   k8s-exec-php-criticals.sh. On container-optimised node OSes with no PHP the
+#   expected answer is "unknown" (exit 2, no PHP found).
+#
+# Required access / permissions
+#   - Rights to create a namespace, a ConfigMap and a DaemonSet, and to read
+#     pod logs in that namespace.
+#   - The namespace must admit privileged pods (it is labelled for the
+#     "privileged" Pod Security Standard below; other admission controllers
+#     such as Gatekeeper/Kyverno may need an exception). If privileged pods
+#     are forbidden, use k8s-exec-php-criticals.sh or ssh-php-criticals.sh.
+#   - bash 3.2+ on the nodes (the detector requires bash) and nsenter in the
+#     pod image (debian:stable-slim ships it in util-linux; any image with
+#     sh + nsenter works -- mirror it for air-gapped clusters).
+#
+# Embedding the detector (the ConfigMap is generated from the script, not
+# stored in this file, so the script stays the single source of truth):
+#   kubectl create namespace phpcrit
+#   kubectl -n phpcrit create configmap php-criticals-detector \
+#       --from-file=detect-php-criticals.sh
+#   # GitOps / review first: render it to a manifest instead of creating it
+#   kubectl -n phpcrit create configmap php-criticals-detector \
+#       --from-file=detect-php-criticals.sh --dry-run=client -o yaml \
+#       > k8s-php-criticals-configmap.yaml
+#   # The rendered ConfigMap has this shape (placeholder, do not hand-edit):
+#   #   apiVersion: v1
+#   #   kind: ConfigMap
+#   #   metadata: {name: php-criticals-detector, namespace: phpcrit}
+#   #   data:
+#   #     detect-php-criticals.sh: |
+#   #       <contents of detect-php-criticals.sh>
+#   # After changing the detector, re-create the ConfigMap and restart:
+#   #   kubectl -n phpcrit rollout restart daemonset/php-criticals
+#
+# Run
+#   kubectl apply -f k8s-php-criticals.yaml
+#   kubectl -n phpcrit rollout status daemonset/php-criticals
+#
+# Collect the verdicts (each pod logs one JSON result line per node)
+#   kubectl -n phpcrit logs -l app=php-criticals --tail=-1 --max-log-requests=500 \
+#     | jq -rR 'fromjson? | select(.phpcrit == "result") | "\(.node): \(.verdict) (exit \(.exit))"'
+#   # roll-up (counts per verdict):
+#   kubectl -n phpcrit logs -l app=php-criticals --tail=-1 --max-log-requests=500 \
+#     | jq -rR 'fromjson? | select(.phpcrit == "result") | .verdict' | sort | uniq -c
+#   # gate (exit 1 if any node is impacted):
+#   kubectl -n phpcrit logs -l app=php-criticals --tail=-1 --max-log-requests=500 \
+#     | jq -R 'fromjson? | select(.phpcrit == "result")' \
+#     | jq -es 'map(select(.verdict == "impacted" or .exit == 1)) | length == 0' >/dev/null
+#   # full per-CVE lines for one node:
+#   kubectl -n phpcrit logs -l app=php-criticals --tail=-1 --prefix --max-log-requests=500
+#
+# Remove
+#   kubectl delete namespace phpcrit
+#
+# Exit-code meaning ("exit" in the result line is the detector's own code)
+#   0 none impacted   1 >=1 CVE impacted   2 unknown / no PHP found   3 usage
+#   verdict "error" = the detector produced no verdict line on that node
+#   (typically no bash on the node, or the ConfigMap is missing/empty).
+# The pod itself always stays Running (it sleeps after logging) so the
+# DaemonSet does not crash-loop; read the verdict from the log, not pod status.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: phpcrit
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: privileged
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: php-criticals
+  namespace: phpcrit
+  labels:
+    app: php-criticals
+spec:
+  selector:
+    matchLabels:
+      app: php-criticals
+  template:
+    metadata:
+      labels:
+        app: php-criticals
+    spec:
+      hostPID: true
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/os: linux
+      tolerations:
+        - operator: Exists
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: detect
+          image: debian:stable-slim
+          securityContext:
+            privileged: true
+            readOnlyRootFilesystem: true
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              # With hostPID, $$ is this shell's PID as the node sees it, so the
+              # node's bash can read the ConfigMap-mounted detector through
+              # /proc/$$/root without anything being copied onto the node.
+              script="/proc/$$/root/scripts/detect-php-criticals.sh"
+              echo "=== node: ${NODE_NAME} ==="
+              if ! command -v nsenter >/dev/null 2>&1; then
+                echo "nsenter not found in the pod image" >&2
+                out=""; rc=127
+              elif [ ! -s /scripts/detect-php-criticals.sh ]; then
+                echo "detector missing from ConfigMap php-criticals-detector" >&2
+                out=""; rc=3
+              else
+                out=$(nsenter -t 1 -m -u -i -n -- bash "$script" -q </dev/null)
+                rc=$?
+              fi
+              printf '%s\n' "$out"
+              verdict=$(printf '%s\n' "$out" | tr -d '\r' | awk 'NF { l = $0 } END { print l }')
+              case "$verdict" in
+                impacted|"not impacted"|unknown) ;;
+                *) verdict=error ;;
+              esac
+              echo "=== end node: ${NODE_NAME} ==="
+              printf '{"phpcrit":"result","node":"%s","verdict":"%s","exit":%s}\n' \
+                "${NODE_NAME}" "$verdict" "$rc"
+              exec sleep infinity
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: detector
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: detector
+          configMap:
+            name: php-criticals-detector
+            defaultMode: 0444
